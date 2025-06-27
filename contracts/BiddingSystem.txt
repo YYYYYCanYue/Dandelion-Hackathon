@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+// 此合约与前端的任务看板.vue和任务详情页面交互
+// 主要用于处理任务竞标相关的功能
+contract BiddingSystem {
+    // 竞标信息结构体
+    struct Bid {
+        address bidder;      // 投标人地址
+        uint256 amount;     // 投标保证金金额
+        bool isQualified;   // 是否被选为合格投标人
+    }
+
+    // 每个任务的所有投标
+    mapping(uint256 => Bid[]) public taskBids;
+    // 每个任务的中标者
+    mapping(uint256 => address) public winners;
+
+    address public factory; // 工厂合约地址（只有工厂可管理竞标流程）
+    bool public factorySet = false;
+    uint256 public depositAmount = 0.1 ether; // 投标保证金
+
+    event NewBid(uint256 indexed taskId, address indexed bidder); // 新投标事件
+    event WinnerSelected(uint256 indexed taskId, address indexed winner); // 选出中标者事件
+
+    // 仅允许工厂合约调用的修饰符
+    modifier onlyFactory() {
+        require(msg.sender == factory, "Unauthorized");
+        _;
+    }
+
+    constructor(address _factory) {
+        factory = _factory;
+        if(_factory != address(0)) factorySet = true;
+    }
+
+    function setFactory(address _factory) external {
+        require(!factorySet, "Factory already set");
+        require(_factory != address(0), "Invalid address");
+        factory = _factory;
+        factorySet = true;
+    }
+
+    // 开启某任务的竞标，重置之前的投标
+    function openBidding(uint256 _taskId) external onlyFactory {
+        delete taskBids[_taskId];
+    }
+
+    // 用户参与投标，需缴纳保证金，且不能重复投标
+    function placeBid(uint256 _taskId) external payable {
+        require(msg.value == depositAmount, "Incorrect deposit");
+        // 防止重复投标
+        Bid[] storage bids = taskBids[_taskId];
+        for (uint i = 0; i < bids.length; i++) {
+            require(bids[i].bidder != msg.sender, "Already bid");
+        }
+        bids.push(Bid({
+            bidder: msg.sender,
+            amount: msg.value,
+            isQualified: false
+        }));
+        emit NewBid(_taskId, msg.sender);
+    }
+
+    // 工厂合约可将某投标人标记为合格
+    function qualifyBidder(uint256 _taskId, uint256 _bidIndex) external onlyFactory {
+        require(_bidIndex < taskBids[_taskId].length, "Invalid bid index");
+        taskBids[_taskId][_bidIndex].isQualified = true;
+    }
+
+    // 工厂合约选出中标者
+    function selectWinner(uint256 _taskId, uint256 _bidIndex) external onlyFactory {
+        require(_bidIndex < taskBids[_taskId].length, "Invalid bid index");
+        winners[_taskId] = taskBids[_taskId][_bidIndex].bidder;
+        emit WinnerSelected(_taskId, winners[_taskId]);
+    }
+}
